@@ -1,0 +1,76 @@
+-- Digital Library Catalog Anomaly Assessment System
+-- PostgreSQL schema for Render PostgreSQL.
+-- Run this in the database's SQL console or with psql.
+
+CREATE TABLE IF NOT EXISTS books (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    catalog_code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    author TEXT,
+    isbn TEXT,
+    category TEXT NOT NULL,
+    availability_status TEXT NOT NULL DEFAULT 'Available'
+        CHECK (availability_status IN ('Available', 'Borrowed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Deliberately do not make catalog_code or ISBN unique: duplicate/invalid values
+-- must be storable so the anomaly scanner can report them.
+CREATE INDEX IF NOT EXISTS idx_books_catalog_code ON books (catalog_code);
+CREATE INDEX IF NOT EXISTS idx_books_isbn ON books (isbn);
+CREATE INDEX IF NOT EXISTS idx_books_title ON books (title);
+
+CREATE TABLE IF NOT EXISTS assessment_runs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    records_checked INTEGER NOT NULL DEFAULT 0 CHECK (records_checked >= 0),
+    anomalies_detected INTEGER NOT NULL DEFAULT 0 CHECK (anomalies_detected >= 0),
+    status TEXT NOT NULL DEFAULT 'Completed'
+        CHECK (status IN ('Running', 'Completed', 'Failed'))
+);
+
+CREATE TABLE IF NOT EXISTS anomalies (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    assessment_run_id BIGINT NOT NULL REFERENCES assessment_runs(id) ON DELETE CASCADE,
+    book_id BIGINT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    anomaly_type TEXT NOT NULL
+        CHECK (anomaly_type IN ('Missing Data', 'Invalid ID', 'Inconsistent Data', 'Duplicate ISBN')),
+    description TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK (severity IN ('Low', 'Medium', 'High')),
+    status TEXT NOT NULL DEFAULT 'Unresolved'
+        CHECK (status IN ('Unresolved', 'Resolved')),
+    detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_anomalies_run ON anomalies (assessment_run_id);
+CREATE INDEX IF NOT EXISTS idx_anomalies_book ON anomalies (book_id);
+CREATE INDEX IF NOT EXISTS idx_anomalies_status ON anomalies (status);
+
+-- Optional account table for a real login implementation.
+-- Store a securely generated password hash (for example, Argon2id or bcrypt), never a plaintext password.
+CREATE TABLE IF NOT EXISTS app_users (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'reviewer'
+        CHECK (role IN ('admin', 'reviewer')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Sample catalog rows reflected in the attached HTML prototype.
+INSERT INTO books (catalog_code, title, author, isbn, category, availability_status)
+SELECT v.catalog_code, v.title, v.author, v.isbn, v.category, v.availability_status
+FROM (VALUES
+    ('BK001', 'Database Systems', 'John Smith', '123456789', 'ICT', 'Available'),
+    ('BK002', 'Cyber Security', 'Mary Jones', '987654321', 'Security', 'Borrowed'),
+    ('BK003', 'Artificial Intelligence', 'Ann Brown', '', 'AI', 'Available'),
+    ('BK004', 'Computer Networks', 'David Lee', '444555666', 'Networking', 'Available'),
+    ('BK005', 'Web Development', 'Peter Kim', '987654321', 'Programming', 'Borrowed'),
+    ('BK006', 'Information Systems', '', '555666777', 'ICT', 'Available'),
+    ('BK007', 'Digital Forensics', 'Grace Mwangi', '888999000', 'Cyber Security', 'Available')
+) AS v(catalog_code, title, author, isbn, category, availability_status)
+WHERE NOT EXISTS (
+    SELECT 1 FROM books b WHERE b.catalog_code = v.catalog_code
+);
